@@ -307,6 +307,20 @@ def test_custom_mcu_yaml():
     _ = model.model.predict(torch.zeros(1, 3, 192, 192))
 
 
+def test_custom_wiou_loss():
+    """Test Wise-IoU and SIoU loss paths on simple xyxy boxes."""
+    from ultralytics.utils.loss import WiseIoULoss
+
+    pred = torch.tensor([[0.0, 0.0, 2.0, 2.0], [1.0, 1.0, 3.0, 3.0]])
+    target = torch.tensor([[0.0, 0.0, 2.0, 2.0], [1.0, 1.0, 3.0, 3.0]])
+
+    wiou = WiseIoULoss("WIoU", monotonous=False)
+    siou = WiseIoULoss("SIoU", monotonous=None)
+
+    assert torch.isfinite(wiou(pred, target)).all()
+    assert torch.isfinite(siou(pred, target)).all()
+
+
 def test_custom_mobileone_gsconv_yaml():
     """Test the custom MobileOne + GSConv YOLO11 architecture builds and runs a forward pass."""
     model = YOLO(ROOT / "cfg/models/11/yolo11-mobileone-gsconv.yaml")

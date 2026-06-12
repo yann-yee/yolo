@@ -27,7 +27,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=4, help="Number of dataloader workers.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument("--patience", type=int, default=50, help="Early stopping patience.")
-    parser.add_argument("--optimizer", type=str, default="auto", help="Optimizer name.")
+    parser.add_argument("--optimizer", type=str, default="AdamW", help="Optimizer name.")
+    parser.add_argument("--box", type=float, default=None, help="Box loss gain.")
+    parser.add_argument("--cls", type=float, default=None, help="Classification loss gain.")
+    parser.add_argument("--cls-pw", dest="cls_pw", type=float, default=None, help="Class weight power.")
+    parser.add_argument("--dfl", type=float, default=None, help="Distribution focal loss gain.")
+    parser.add_argument(
+        "--box-loss",
+        type=str,
+        default=None,
+        choices=("ciou", "siou", "wiou"),
+        help="Box regression loss type.",
+    )
+    parser.add_argument(
+        "--wiou-version",
+        type=str,
+        default=None,
+        choices=("origin", "v2", "v3"),
+        help="Wise-IoU dynamic focusing mode.",
+    )
+    parser.add_argument("--wiou-momentum", type=float, default=None, help="Wise-IoU running mean momentum.")
+    parser.add_argument("--wiou-alpha", type=float, default=None, help="Wise-IoU dynamic focusing alpha.")
+    parser.add_argument("--wiou-delta", type=float, default=None, help="Wise-IoU dynamic focusing delta.")
+    parser.add_argument("--siou-theta", type=float, default=None, help="SIoU shape exponent.")
     parser.add_argument("--cache", action=BooleanOptionalAction, default=False, help="Cache images in memory.")
     parser.add_argument("--resume", action=BooleanOptionalAction, default=False, help="Resume from last checkpoint.")
     parser.add_argument("--amp", action=BooleanOptionalAction, default=True, help="Use automatic mixed precision.")
@@ -62,6 +84,16 @@ def main() -> None:
         "seed": args.seed,
         "patience": args.patience,
         "optimizer": args.optimizer,
+        "box": args.box,
+        "cls": args.cls,
+        "cls_pw": args.cls_pw,
+        "dfl": args.dfl,
+        "box_loss": args.box_loss,
+        "wiou_version": args.wiou_version,
+        "wiou_momentum": args.wiou_momentum,
+        "wiou_alpha": args.wiou_alpha,
+        "wiou_delta": args.wiou_delta,
+        "siou_theta": args.siou_theta,
         "cache": args.cache,
         "resume": args.resume,
         "amp": args.amp,

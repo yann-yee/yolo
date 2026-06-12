@@ -103,6 +103,12 @@ box: 7.5 # (float) box loss gain
 cls: 0.5 # (float) classification loss gain
 cls_pw: 0.0 # (float) class weights power for handling class imbalance (0.0=disable, 1.0=full inverse frequency)
 dfl: 1.5 # (float) distribution focal loss gain
+box_loss: ciou # (str) box regression loss: ciou, siou, or wiou
+wiou_version: v3 # (str) Wise-IoU mode: origin, v2, or v3
+wiou_momentum: 0.01 # (float) Wise-IoU running mean momentum
+wiou_alpha: 1.7 # (float) Wise-IoU dynamic focusing alpha
+wiou_delta: 2.7 # (float) Wise-IoU dynamic focusing delta
+siou_theta: 4.0 # (float) SIoU shape exponent
 pose: 12.0 # (float) pose loss gain (pose tasks)
 kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
 rle: 1.0 # (float) rle loss gain (pose tasks)

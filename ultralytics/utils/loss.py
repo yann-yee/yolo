@@ -15,6 +15,7 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
+from .custom.my_loss import WiseIoULoss
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist, rbox2dist
 
@@ -110,10 +111,48 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses for bounding boxes."""
 
-    def __init__(self, reg_max: int = 16):
+    def __init__(
+        self,
+        reg_max: int = 16,
+        box_loss: str = "ciou",
+        wiou_version: str = "v3",
+        wiou_momentum: float = 1e-2,
+        wiou_alpha: float = 1.7,
+        wiou_delta: float = 2.7,
+        siou_theta: float = 4.0,
+    ):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+        self.box_loss = box_loss.lower()
+        self.siou_theta = siou_theta
+        self.wiou_loss = None
+
+        if self.box_loss == "ciou":
+            return
+
+        if self.box_loss not in {"siou", "wiou"}:
+            raise ValueError(f"Unsupported box loss type: {box_loss}")
+
+        version = str(wiou_version).lower()
+        if version in {"origin", "base", "none"}:
+            monotonous = None
+        elif version in {"v2", "mono", "monotonous"}:
+            monotonous = True
+        elif version in {"v3", "default", "wise"}:
+            monotonous = False
+        else:
+            raise ValueError(f"Unsupported Wise-IoU version: {wiou_version}")
+
+        ltype = "SIoU" if self.box_loss == "siou" else "WIoU"
+        self.wiou_loss = WiseIoULoss(
+            ltype=ltype,
+            monotonous=monotonous,
+            momentum=wiou_momentum,
+            alpha=wiou_alpha,
+            delta=wiou_delta,
+            theta=siou_theta,
+        )
 
     def forward(
         self,
@@ -128,28 +167,37 @@ class BboxLoss(nn.Module):
         stride: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
-        weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        device = pred_bboxes.device
+        weight = target_scores.sum(-1)[fg_mask]
+        loss_iou = torch.tensor(0.0, device=device)
+        loss_dfl = torch.tensor(0.0, device=device)
 
-        # DFL loss
-        if self.dfl_loss:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
-            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
-            loss_dfl = loss_dfl.sum() / target_scores_sum
-        else:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes)
-            # normalize ltrb by image size
-            target_ltrb = target_ltrb * stride
-            target_ltrb[..., 0::2] /= imgsz[1]
-            target_ltrb[..., 1::2] /= imgsz[0]
-            pred_dist = pred_dist * stride
-            pred_dist[..., 0::2] /= imgsz[1]
-            pred_dist[..., 1::2] /= imgsz[0]
-            loss_dfl = (
-                F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True) * weight
-            )
-            loss_dfl = loss_dfl.sum() / target_scores_sum
+        if fg_mask.sum():
+            if self.box_loss == "ciou":
+                iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+                loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+            else:
+                loss_iou = (self.wiou_loss(pred_bboxes[fg_mask], target_bboxes[fg_mask]) * weight).sum() / target_scores_sum
+
+            # DFL loss
+            if self.dfl_loss:
+                target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
+                loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask])
+                loss_dfl = (loss_dfl * weight.unsqueeze(-1)).sum() / target_scores_sum
+            else:
+                target_ltrb = bbox2dist(anchor_points, target_bboxes)
+                # normalize ltrb by image size
+                target_ltrb = target_ltrb * stride
+                target_ltrb[..., 0::2] /= imgsz[1]
+                target_ltrb[..., 1::2] /= imgsz[0]
+                pred_dist = pred_dist * stride
+                pred_dist[..., 0::2] /= imgsz[1]
+                pred_dist[..., 1::2] /= imgsz[0]
+                loss_dfl = (
+                    F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True)
+                    * weight.unsqueeze(-1)
+                )
+                loss_dfl = loss_dfl.sum() / target_scores_sum
 
         return loss_iou, loss_dfl
 
@@ -365,7 +413,15 @@ class v8DetectionLoss:
             stride=self.stride.tolist(),
             topk2=tal_topk2,
         )
-        self.bbox_loss = BboxLoss(m.reg_max).to(device)
+        self.bbox_loss = BboxLoss(
+            m.reg_max,
+            box_loss=getattr(h, "box_loss", "ciou"),
+            wiou_version=getattr(h, "wiou_version", "v3"),
+            wiou_momentum=getattr(h, "wiou_momentum", 1e-2),
+            wiou_alpha=getattr(h, "wiou_alpha", 1.7),
+            wiou_delta=getattr(h, "wiou_delta", 2.7),
+            siou_theta=getattr(h, "siou_theta", 4.0),
+        ).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
