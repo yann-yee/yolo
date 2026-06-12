@@ -1,0 +1,49 @@
+# YOLO11 MCU
+# Target: STM32H743 + Cube.AI + INT8 + 192x192
+
+nc: 10
+reg_max: 1
+activation: nn.ReLU6(inplace=True)
+
+scales:
+  # [depth, width, max_channels]
+  n: [0.33, 0.12, 128]
+
+# Backbone
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, GhostConv, [64, 3, 2]]  # 0, stem / P1
+  - [-1, 1, ECA, []]  # 1, early attention
+  - [-1, 1, GhostConv, [80, 3, 2]]  # 2, P2/4
+  - [-1, 1, MBConv, [80, 2.0]]  # 3
+  - [-1, 1, GhostConv, [96, 3, 2]]  # 4, P3/8
+  - [-1, 1, MBConv, [96, 2.0]]  # 5
+  - [-1, 1, ECA, []]  # 6, second attention on P3
+  - [-1, 1, GhostConv, [128, 3, 2]]  # 7, P4/16
+  - [-1, 1, MBConv, [128, 2.0]]  # 8
+  - [-1, 1, GhostConv, [128, 3, 2]]  # 9, P5/32
+  - [-1, 1, SimSPPF, [128, 5]]  # 10
+
+# Neck: lightweight BiFPN style top-down / bottom-up fusion
+head:
+  # Top-down
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 11, P5 -> P4
+  - [[-1, 8], 1, BiFPNAdd, [128]]  # 12
+  - [-1, 1, MBConv, [128, 2.0]]  # 13
+  - [-1, 1, ECA, []]  # 14, attention on fused P4
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 15, P4 -> P3
+  - [[-1, 6], 1, BiFPNAdd, [96]]  # 16
+  - [-1, 1, MBConv, [96, 2.0]]  # 17, P3 output
+
+  # Bottom-up
+  - [-1, 1, GhostConv, [96, 3, 2]]  # 18, P3 -> P4
+  - [[-1, 14], 1, BiFPNAdd, [128]]  # 19
+  - [-1, 1, MBConv, [128, 2.0]]  # 20, P4 output
+
+  - [-1, 1, GhostConv, [128, 3, 2]]  # 21, P4 -> P5
+  - [[-1, 10], 1, BiFPNAdd, [128]]  # 22
+  - [-1, 1, MBConv, [128, 2.0]]  # 23, P5 output
+
+  # Decoupled detection head
+  - [[17, 20, 23], 1, DecoupledDetect, [nc]]  # 24, Detect(P3, P4, P5)

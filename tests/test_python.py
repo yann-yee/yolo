@@ -291,11 +291,28 @@ def test_train_pretrained(scls):
 def test_all_model_yamls():
     """Test YOLO model creation for all available YAML configurations in the `cfg/models` directory."""
     for m in (ROOT / "cfg" / "models").rglob("*.yaml"):
+        if m.name == "yolo11-mobileone-gsconv.yaml":
+            continue
         if "rtdetr" in m.name:
             if TORCH_1_11:
                 _ = RTDETR(m.name)(SOURCE, imgsz=160)
         else:
             YOLO(m.name)
+
+
+def test_custom_mcu_yaml():
+    """Test the custom YOLO11-MCU architecture builds and runs a forward pass."""
+    model = YOLO(ROOT / "cfg/models/11/yolo11-mcu.yaml")
+    model.model.eval()
+    _ = model.model.predict(torch.zeros(1, 3, 192, 192))
+
+
+def test_custom_mobileone_gsconv_yaml():
+    """Test the custom MobileOne + GSConv YOLO11 architecture builds and runs a forward pass."""
+    model = YOLO(ROOT / "cfg/models/11/yolo11-mobileone-gsconv.yaml")
+    model.model.eval()
+    _ = model.model.predict(torch.zeros(1, 3, 64, 64))
+    model.fuse()
 
 
 @pytest.mark.skipif(WINDOWS, reason="Windows slow CI export bug https://github.com/ultralytics/ultralytics/pull/16003")

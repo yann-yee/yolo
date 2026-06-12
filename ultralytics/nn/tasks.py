@@ -11,6 +11,17 @@ import torch
 import torch.nn as nn
 
 from ultralytics.nn.autobackend import check_class_names
+from ultralytics.nn.custom import (
+    BiFPNAdd,
+    DecoupledDetect,
+    ECA,
+    GSConv,
+    MBConv,
+    MobileOne,
+    RepDetect,
+    SimSPPF,
+    VoVGSCSP,
+)
 from ultralytics.nn.modules import (
     AIFI,
     C1,
@@ -240,6 +251,9 @@ class BaseModel(torch.nn.Module):
                     m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
                     delattr(m, "bn")  # remove batchnorm
                     m.forward = m.forward_fuse  # update forward
+                if isinstance(m, MobileOne):
+                    m.fuse()
+                    m.forward = m.forward_fuse
                 if isinstance(m, ConvTranspose) and hasattr(m, "bn"):
                     m.conv_transpose = fuse_deconv_and_bn(m.conv_transpose, m.bn)
                     delattr(m, "bn")  # remove batchnorm
@@ -1678,10 +1692,13 @@ def parse_model(d, ch, verbose=True):
             Conv,
             ConvTranspose,
             GhostConv,
+            GSConv,
+            MBConv,
             Bottleneck,
             GhostBottleneck,
             SPP,
             SPPF,
+            SimSPPF,
             C2fPSA,
             C2PSA,
             DWConv,
@@ -1708,6 +1725,8 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
+            MobileOne,
+            VoVGSCSP,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1727,6 +1746,7 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             C2PSA,
             A2C2f,
+            VoVGSCSP,
         }
     )
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
@@ -1742,6 +1762,14 @@ def parse_model(d, ch, verbose=True):
                 with contextlib.suppress(ValueError):
                     args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
+        if m is ECA:
+            args = [ch[f], *args]
+            c2 = ch[f]
+        elif m is BiFPNAdd:
+            c2 = args[0]
+            if c2 != nc:
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c2, *args[1:]]
         if m in base_modules:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 != nc (e.g., Classify() output)
@@ -1781,6 +1809,8 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset(
             {
                 Detect,
+                DecoupledDetect,
+                RepDetect,
                 WorldDetect,
                 YOLOEDetect,
                 Segment,
@@ -1796,7 +1826,20 @@ def parse_model(d, ch, verbose=True):
             args.extend([reg_max, end2end, [ch[x] for x in f]])
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, Segment26, YOLOESegment, YOLOESegment26, Pose, Pose26, OBB, OBB26}:
+            if m in {
+                Detect,
+                DecoupledDetect,
+                RepDetect,
+                YOLOEDetect,
+                Segment,
+                Segment26,
+                YOLOESegment,
+                YOLOESegment26,
+                Pose,
+                Pose26,
+                OBB,
+                OBB26,
+            }:
                 m.legacy = legacy
         elif m is SemanticSegment:
             args.append([ch[x] for x in f])  # nc, ch tuple
@@ -1812,6 +1855,8 @@ def parse_model(d, ch, verbose=True):
             args = [c1, c2, *args[1:]]
         elif m is CBFuse:
             c2 = ch[f[-1]]
+        elif m is BiFPNAdd:
+            pass
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]

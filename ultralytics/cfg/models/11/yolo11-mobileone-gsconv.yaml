@@ -1,0 +1,46 @@
+# yolo11-mobileone-gsconv.yaml
+nc: 10
+reg_max: 8
+activation: nn.Hardswish()
+scales:
+  # [depth, width, max_channels]
+  n: [0.33, 0.16, 512]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+# Backbone
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
+  - [-1, 1, MobileOne, [64, False]]
+  - [-1, 1, ADown, [128]] # 2-P2/4
+  - [-1, 2, MobileOne, [128, False]]
+  - [-1, 1, ADown, [256]] # 4-P3/8
+  - [-1, 2, MobileOne, [256, False]]
+  - [-1, 1, ADown, [512]] # 6-P4/16
+  - [-1, 4, MobileOne, [512, True]]
+  - [-1, 1, ADown, [1024]] # 8-P5/32
+  - [-1, 2, MobileOne, [1024, True]]
+  - [-1, 1, SimSPPF, [1024, 5]] # 10
+
+# Head
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 7], 1, Concat, [1]]
+  - [-1, 2, VoVGSCSP, [512, 0.5]] # 13
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 5], 1, Concat, [1]]
+  - [-1, 2, VoVGSCSP, [256, 0.5]] # 16 (P3/8-small)
+
+  - [-1, 1, GSConv, [256, 3, 2]]
+  - [[-1, 13], 1, Concat, [1]]
+  - [-1, 2, VoVGSCSP, [512, 0.5]] # 19 (P4/16-medium)
+
+  - [-1, 1, GSConv, [512, 3, 2]]
+  - [[-1, 10], 1, Concat, [1]]
+  - [-1, 2, VoVGSCSP, [1024, 0.5]] # 22 (P5/32-large)
+
+  - [[16, 19, 22], 1, RepDetect, [nc]] # Detect(P3, P4, P5)
